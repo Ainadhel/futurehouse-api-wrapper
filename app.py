@@ -9,9 +9,21 @@ from functools import wraps
 try:
     from futurehouse_client import FutureHouseClient, JobNames
     from futurehouse_client.models.app import TaskRequest
-except ImportError:
-    print("Erreur: futurehouse_client n'est pas installé. Installez-le avec: pip install futurehouse-client")
-    exit(1)
+    FUTUREHOUSE_AVAILABLE = True
+except ImportError as e:
+    print(f"Erreur: futurehouse_client n'est pas installé: {e}")
+    print("Installez-le avec: pip install futurehouse-client")
+    FUTUREHOUSE_AVAILABLE = False
+    # Créer des classes mock pour éviter les erreurs
+    class FutureHouseClient:
+        def __init__(self, api_key):
+            self.api_key = api_key
+    class JobNames:
+        CROW = "CROW"
+        FALCON = "FALCON"
+        OWL = "OWL"
+        PHOENIX = "PHOENIX"
+        DUMMY = "DUMMY"
 
 app = Flask(__name__)
 
@@ -25,10 +37,20 @@ FUTUREHOUSE_API_KEY = os.getenv('FUTUREHOUSE_API_KEY')
 # Vérification de la clé API
 if not FUTUREHOUSE_API_KEY:
     logger.error("FUTUREHOUSE_API_KEY n'est pas définie dans les variables d'environnement")
-    exit(1)
+    FUTUREHOUSE_AVAILABLE = False
 
 # Initialisation du client FutureHouse
-client = FutureHouseClient(api_key=FUTUREHOUSE_API_KEY)
+if FUTUREHOUSE_AVAILABLE and FUTUREHOUSE_API_KEY:
+    try:
+        client = FutureHouseClient(api_key=FUTUREHOUSE_API_KEY)
+        logger.info("Client FutureHouse initialisé avec succès")
+    except Exception as e:
+        logger.error(f"Erreur lors de l'initialisation du client FutureHouse: {e}")
+        FUTUREHOUSE_AVAILABLE = False
+        client = None
+else:
+    client = None
+    logger.warning("Client FutureHouse non disponible")
 
 def handle_errors(f):
     """Décorateur pour gérer les erreurs de façon uniforme"""
@@ -51,7 +73,10 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'service': 'FutureHouse API Wrapper',
-        'version': '1.0.0'
+        'version': '1.0.0',
+        'futurehouse_client_available': FUTUREHOUSE_AVAILABLE,
+        'api_key_configured': bool(FUTUREHOUSE_API_KEY),
+        'client_initialized': client is not None
     })
 
 @app.route('/jobs', methods=['GET'])
@@ -181,6 +206,16 @@ def get_task_result(task_id):
 @handle_errors
 def run_task_until_done():
     """Crée et exécute une tâche jusqu'à completion"""
+    
+    # Vérifier que le client est disponible
+    if not FUTUREHOUSE_AVAILABLE or not client:
+        return jsonify({
+            'error': True,
+            'message': 'Client FutureHouse non disponible. Vérifiez la configuration.',
+            'futurehouse_available': FUTUREHOUSE_AVAILABLE,
+            'client_initialized': client is not None
+        }), 503
+    
     data = request.get_json()
     
     if not data:
