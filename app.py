@@ -301,36 +301,62 @@ def get_async_task_result(task_id):
     
     return jsonify(task_results[task_id])
 
-@app.route('/tasks', methods=['GET'])
+@app.route('/debug', methods=['GET'])
+def debug_info():
+    """Endpoint de débogage simple"""
+    return jsonify({
+        'status': 'healthy',
+        'message': 'Debug endpoint working',
+        'active_tasks_count': len(active_tasks),
+        'completed_tasks_count': len(task_results),
+        'server_time': time.time(),
+        'futurehouse_available': FUTUREHOUSE_AVAILABLE
+    })
+
+@app.route('/tasks/list', methods=['GET'])
 @handle_errors
 def list_tasks():
     """Liste toutes les tâches actives et terminées"""
     
     all_tasks = {}
     
-    # Ajouter les tâches actives
-    for task_id, task_info in active_tasks.items():
-        all_tasks[task_id] = {
-            'status': task_info['status'],
-            'started_at': task_info['started_at'],
-            'running_time': time.time() - task_info['started_at']
-        }
-    
-    # Ajouter les tâches terminées
-    for task_id, result in task_results.items():
-        if task_id not in all_tasks:  # Éviter les doublons
+    try:
+        # Ajouter les tâches actives
+        for task_id, task_info in active_tasks.items():
             all_tasks[task_id] = {
-                'status': result['status'],
-                'completed_at': result.get('completed_at'),
-                'success': result['status'] == 'success'
+                'status': task_info['status'],
+                'started_at': task_info['started_at'],
+                'running_time': time.time() - task_info['started_at']
             }
-    
-    return jsonify({
-        'tasks': all_tasks,
-        'total_tasks': len(all_tasks),
-        'active_tasks': len(active_tasks),
-        'completed_tasks': len(task_results)
-    })
+        
+        # Ajouter les tâches terminées
+        for task_id, result in task_results.items():
+            if task_id not in all_tasks:  # Éviter les doublons
+                all_tasks[task_id] = {
+                    'status': result['status'],
+                    'completed_at': result.get('completed_at'),
+                    'success': result['status'] == 'success'
+                }
+        
+        return jsonify({
+            'status': 'success',
+            'tasks': all_tasks,
+            'total_tasks': len(all_tasks),
+            'active_tasks': len(active_tasks),
+            'completed_tasks': len(task_results),
+            'timestamp': time.time()
+        })
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de la liste des tâches: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'tasks': {},
+            'total_tasks': 0,
+            'active_tasks': 0,
+            'completed_tasks': 0
+        })
 
 @app.route('/task/test', methods=['POST'])
 @handle_errors
