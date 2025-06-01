@@ -119,7 +119,15 @@ def get_available_jobs():
 @app.route('/task', methods=['POST'])
 @handle_errors
 def create_task():
-    """Crée une nouvelle tâche FutureHouse"""
+    """Crée une nouvelle tâche FutureHouse (asynchrone)"""
+    
+    # Vérifier que le client est disponible
+    if not FUTUREHOUSE_AVAILABLE or not client:
+        return jsonify({
+            'error': True,
+            'message': 'Client FutureHouse non disponible'
+        }), 503
+    
     data = request.get_json()
     
     if not data:
@@ -146,61 +154,123 @@ def create_task():
             'message': f'Job invalide. Jobs disponibles: {valid_jobs}'
         }), 400
     
-    # Construire les données de la tâche
-    task_data = {
-        'name': getattr(JobNames, job_name),
-        'query': query
-    }
-    
-    # Ajouter une configuration runtime si fournie
-    if 'runtime_config' in data:
-        task_data['runtime_config'] = data['runtime_config']
-    
-    # Ajouter un ID de tâche personnalisé si fourni
-    if 'task_id' in data:
-        task_data['task_id'] = data['task_id']
-    
-    # Créer la tâche
-    task_id = client.create_task(task_data)
-    
-    logger.info(f"Tâche créée avec l'ID: {task_id}")
-    
-    return jsonify({
-        'status': 'success',
-        'task_id': task_id,
-        'job_name': job_name,
-        'query': query,
-        'message': 'Tâche créée avec succès'
-    })
+    try:
+        # Construire les données de la tâche
+        task_data = {
+            'name': getattr(JobNames, job_name),
+            'query': query
+        }
+        
+        # Ajouter une configuration runtime si fournie
+        if 'runtime_config' in data:
+            task_data['runtime_config'] = data['runtime_config']
+        
+        # Ajouter un ID de tâche personnalisé si fourni
+        if 'task_id' in data:
+            task_data['task_id'] = data['task_id']
+        
+        # Créer la tâche (ne l'exécute pas, juste la créé)
+        task_id = client.create_task(task_data)
+        
+        logger.info(f"Tâche créée avec l'ID: {task_id}")
+        
+        return jsonify({
+            'status': 'success',
+            'task_id': task_id,
+            'job_name': job_name,
+            'query': query,
+            'message': 'Tâche créée avec succès. Utilisez /task/{task_id}/status pour suivre le progrès.'
+        })
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de la création de la tâche: {str(e)}")
+        return jsonify({
+            'error': True,
+            'message': f'Erreur lors de la création de la tâche: {str(e)}'
+        }), 500
 
 @app.route('/task/<task_id>/status', methods=['GET'])
 @handle_errors
 def get_task_status(task_id):
     """Récupère le statut d'une tâche"""
-    task_status = client.get_task_status(task_id)
     
-    return jsonify({
-        'status': 'success',
-        'task_id': task_id,
-        'task_status': task_status
-    })
+    # Vérifier que le client est disponible
+    if not FUTUREHOUSE_AVAILABLE or not client:
+        return jsonify({
+            'error': True,
+            'message': 'Client FutureHouse non disponible'
+        }), 503
+    
+    try:
+        task_status = client.get_task_status(task_id)
+        
+        logger.info(f"Statut de la tâche {task_id}: {task_status}")
+        
+        return jsonify({
+            'status': 'success',
+            'task_id': task_id,
+            'task_status': task_status,
+            'is_completed': task_status in ['completed', 'success', 'failed', 'error'],
+            'message': f'Statut: {task_status}'
+        })
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération du statut de la tâche {task_id}: {str(e)}")
+        return jsonify({
+            'error': True,
+            'message': f'Erreur lors de la récupération du statut: {str(e)}',
+            'task_id': task_id
+        }), 500
 
 @app.route('/task/<task_id>/result', methods=['GET'])
 @handle_errors
 def get_task_result(task_id):
     """Récupère le résultat d'une tâche"""
-    # Paramètre optionnel pour récupérer les détails verbeux
-    verbose = request.args.get('verbose', 'false').lower() == 'true'
     
-    task_result = client.get_task(task_id)
+    # Vérifier que le client est disponible
+    if not FUTUREHOUSE_AVAILABLE or not client:
+        return jsonify({
+            'error': True,
+            'message': 'Client FutureHouse non disponible'
+        }), 503
     
-    response_data = {
-        'status': 'success',
-        'task_id': task_id,
-        'result': task_result
-    }
-    
-    return jsonify(response_data)
+    try:
+        # Paramètre optionnel pour récupérer les détails verbeux
+        verbose = request.args.get('verbose', 'false').lower() == 'true'
+        
+        # Vérifier d'abord le statut
+        task_status = client.get_task_status(task_id)
+        
+        if task_status not in ['completed', 'success']:
+            return jsonify({
+                'status': 'pending',
+                'task_id': task_id,
+                'task_status': task_status,
+                'message': f'Tâche pas encore terminée. Statut actuel: {task_status}'
+            }), 202  # 202 Accepted - en cours de traitement
+        
+        # Récupérer le résultat
+        task_result = client.get_task(task_id)
+        
+        logger.info(f"Résultat récupéré pour la tâche {task_id}")
+        
+        response_data = {
+            'status': 'success',
+            'task_id': task_id,
+            'task_status': task_status,
+            'result': task_result,
+            'message': 'Résultat récupéré avec succès'
+        }
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération du résultat de la tâche {task_id}: {str(e)}")
+        return jsonify({
+            'error': True,
+            'message': f'Erreur lors de la récupération du résultat: {str(e)}',
+            'task_id': task_id
+        }), 500
 
 @app.route('/task/test', methods=['POST'])
 @handle_errors
