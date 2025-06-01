@@ -202,7 +202,15 @@ def get_task_status(task_id):
         }), 503
     
     try:
-        task_status = client.get_task_status(task_id)
+        # Utiliser get_task() qui retourne les informations complètes incluant le statut
+        task_info = client.get_task(task_id)
+        
+        # Extraire le statut de la réponse
+        task_status = getattr(task_info, 'status', 'unknown')
+        
+        # Déterminer si la tâche est terminée
+        completed_states = ['completed', 'success', 'failed', 'error', 'finished']
+        is_completed = task_status.lower() in completed_states
         
         logger.info(f"Statut de la tâche {task_id}: {task_status}")
         
@@ -210,8 +218,9 @@ def get_task_status(task_id):
             'status': 'success',
             'task_id': task_id,
             'task_status': task_status,
-            'is_completed': task_status in ['completed', 'success', 'failed', 'error'],
-            'message': f'Statut: {task_status}'
+            'is_completed': is_completed,
+            'message': f'Statut: {task_status}',
+            'raw_task_info': task_info.__dict__ if hasattr(task_info, '__dict__') else str(task_info)
         })
         
     except Exception as e:
@@ -238,19 +247,34 @@ def get_task_result(task_id):
         # Paramètre optionnel pour récupérer les détails verbeux
         verbose = request.args.get('verbose', 'false').lower() == 'true'
         
-        # Vérifier d'abord le statut
-        task_status = client.get_task_status(task_id)
+        # Récupérer les informations complètes de la tâche
+        task_info = client.get_task(task_id)
         
-        if task_status not in ['completed', 'success']:
+        # Extraire le statut
+        task_status = getattr(task_info, 'status', 'unknown')
+        
+        # Vérifier si la tâche est terminée
+        completed_states = ['completed', 'success', 'finished']
+        failed_states = ['failed', 'error']
+        
+        if task_status.lower() not in completed_states and task_status.lower() not in failed_states:
             return jsonify({
                 'status': 'pending',
                 'task_id': task_id,
                 'task_status': task_status,
-                'message': f'Tâche pas encore terminée. Statut actuel: {task_status}'
+                'message': f'Tâche pas encore terminée. Statut actuel: {task_status}',
+                'raw_task_info': task_info.__dict__ if hasattr(task_info, '__dict__') else str(task_info)
             }), 202  # 202 Accepted - en cours de traitement
         
-        # Récupérer le résultat
-        task_result = client.get_task(task_id)
+        # Si la tâche a échoué
+        if task_status.lower() in failed_states:
+            return jsonify({
+                'status': 'failed',
+                'task_id': task_id,
+                'task_status': task_status,
+                'message': f'Tâche échouée. Statut: {task_status}',
+                'raw_task_info': task_info.__dict__ if hasattr(task_info, '__dict__') else str(task_info)
+            }), 200
         
         logger.info(f"Résultat récupéré pour la tâche {task_id}")
         
@@ -258,7 +282,7 @@ def get_task_result(task_id):
             'status': 'success',
             'task_id': task_id,
             'task_status': task_status,
-            'result': task_result,
+            'result': task_info,
             'message': 'Résultat récupéré avec succès'
         }
         
